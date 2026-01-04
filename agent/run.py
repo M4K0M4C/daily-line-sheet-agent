@@ -1,14 +1,22 @@
 """
 Daily Line Sheet Agent – Entry Point
 
-For now, this file does one thing:
-- prints a message when executed
-
-Later, this file will orchestrate the full agent workflow.
+This program accepts a topic from the command line.
+Later, this topic will guide image search and selection.
 """
 
+import sys
+
+
 def main():
-    print("Daily Line Sheet Agent: run started")
+    if len(sys.argv) < 2:
+        print("Usage: python agent/run.py <topic>")
+        return
+
+    topic = sys.argv[1]
+    print(f"Daily Line Sheet Agent: run started")
+    print(f"Topic: {topic}")
+
 
 if __name__ == "__main__":
     main()
