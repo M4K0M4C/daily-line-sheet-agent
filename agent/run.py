@@ -5,12 +5,14 @@ This program accepts a topic from the command line.
 Later, this topic will guide image search and selection.
 """
 
+from logging import config
 import sys
 import datetime
 import uuid
 from pathlib import Path
 from dataclasses import dataclass
 import os
+import requests
 
 @dataclass
 class AgentConfig:
@@ -45,6 +47,38 @@ def tool_get_pexels_key() -> str:
             "PEXELS_API_KEY is not set. Set it in your environment before running."
         )
     return key
+
+def tool_download_one_pexels_image(config: AgentConfig, run_root: Path, api_key: str) -> Path:
+    """
+    Tool: search Pexels for the topic and download exactly one image.
+
+    Saves the image into: runs/<run_id>/raw/
+    Returns the Path to the downloaded file.
+    """
+    url = "https://api.pexels.com/v1/search"
+    headers = {"Authorization": api_key}
+    params = {"query": config.topic, "per_page": 1}
+
+    resp = requests.get(url, headers=headers, params=params, timeout=30)
+    resp.raise_for_status()
+    data = resp.json()
+
+    photos = data.get("photos", [])
+    if not photos:
+        raise RuntimeError(f"No Pexels results for topic: {config.topic}")
+
+    photo = photos[0]
+    src = photo.get("src", {})
+    image_url = src.get("original") or src.get("large2x") or src.get("large")
+    if not image_url:
+        raise RuntimeError("Pexels response missing image URL")
+
+    img_resp = requests.get(image_url, timeout=60)
+    img_resp.raise_for_status()
+
+    out_path = run_root / "raw" / "pexels_0001.jpg"
+    out_path.write_bytes(img_resp.content)
+    return out_path
 
 def tool_generate_run_id(config: AgentConfig) -> str:
     """
@@ -90,8 +124,11 @@ def main():
     run_root = tool_create_run_folders(config, run_id)
     print(f"Run folder: {run_root}")
     
-    _ = tool_get_pexels_key()
+    api_key = tool_get_pexels_key()
     print("Pexels key: found")
+
+    downloaded_image = tool_download_one_pexels_image(config, run_root, api_key)
+    print(f"Downloaded: {downloaded_image}")
 
     print(plan)
     print(f"Run ID: {run_id}")
