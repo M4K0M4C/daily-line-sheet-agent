@@ -13,6 +13,8 @@ from pathlib import Path
 from dataclasses import dataclass
 import os
 import requests
+import json
+import time
 
 @dataclass
 class AgentConfig:
@@ -48,18 +50,22 @@ def tool_get_pexels_key() -> str:
         )
     return key
 
-def tool_download_one_pexels_image(config: AgentConfig, run_root: Path, api_key: str) -> Path:
+def tool_download_pexels_images(config: AgentConfig, run_root: Path, api_key: str) -> list[Path]:
     """
-    Tool: search Pexels for the topic and download exactly one image.
+    Tool: search Pexels for the topic and download N images.
 
-    Saves the image into: runs/<run_id>/raw/
-    Returns the Path to the downloaded file.
+    Saves into: runs/<run_id>/raw/
+    Writes manifest: runs/<run_id>/review/pexels_manifest.json
+    Returns list of Paths to downloaded files.
     """
-    url = "https://api.pexels.com/v1/search"
+    search_url = "https://api.pexels.com/v1/search"
     headers = {"Authorization": api_key}
-    params = {"query": config.topic, "per_page": 1}
 
-    resp = requests.get(url, headers=headers, params=params, timeout=30)
+    # Pexels per_page max is typically 80; we fetch at most what we need.
+    per_page = min(80, max(1, config.candidates_to_download))
+    params = {"query": config.topic, "per_page": per_page}
+
+    resp = requests.get(search_url, headers=headers, params=params, timeout=30)
     resp.raise_for_status()
     data = resp.json()
 
@@ -67,18 +73,68 @@ def tool_download_one_pexels_image(config: AgentConfig, run_root: Path, api_key:
     if not photos:
         raise RuntimeError(f"No Pexels results for topic: {config.topic}")
 
-    photo = photos[0]
-    src = photo.get("src", {})
-    image_url = src.get("original") or src.get("large2x") or src.get("large")
-    if not image_url:
-        raise RuntimeError("Pexels response missing image URL")
+    # Take only N candidates
+    photos = photos[: config.candidates_to_download]
 
-    img_resp = requests.get(image_url, timeout=60)
-    img_resp.raise_for_status()
+    downloaded_paths: list[Path] = []
+    manifest: dict = {
+        "topic": config.topic,
+        "requested": config.candidates_to_download,
+        "downloaded": 0,
+        "items": [],
+    }
 
-    out_path = run_root / "raw" / "pexels_0001.jpg"
-    out_path.write_bytes(img_resp.content)
-    return out_path
+    raw_dir = run_root / "raw"
+    review_dir = run_root / "review"
+
+    session = requests.Session()
+
+    for idx, photo in enumerate(photos, start=1):
+        src = photo.get("src", {})
+        image_url = src.get("original") or src.get("large2x") or src.get("large")
+        if not image_url:
+            continue
+
+        # Deterministic filename: pexels_0001.jpg, pexels_0002.jpg, ...
+        out_path = raw_dir / f"pexels_{idx:04d}.jpg"
+
+        # Basic rate-limit / retry handling
+        for attempt in range(1, 4):
+            img_resp = session.get(image_url, timeout=60)
+
+            if img_resp.status_code == 429:
+                retry_after = img_resp.headers.get("Retry-After")
+                sleep_s = int(retry_after) if (retry_after and retry_after.isdigit()) else 5
+                time.sleep(sleep_s)
+                continue
+
+            img_resp.raise_for_status()
+            out_path.write_bytes(img_resp.content)
+            downloaded_paths.append(out_path)
+
+            manifest["items"].append(
+                {
+                    "index": idx,
+                    "pexels_id": photo.get("id"),
+                    "photographer": photo.get("photographer"),
+                    "width": photo.get("width"),
+                    "height": photo.get("height"),
+                    "page_url": photo.get("url"),
+                    "image_url": image_url,
+                    "local_file": str(out_path).replace("\\", "/"),
+                }
+            )
+            break
+
+        # Gentle pacing (keeps you out of trouble even when not rate-limited)
+        time.sleep(0.4)
+
+    manifest["downloaded"] = len(downloaded_paths)
+
+    manifest_path = review_dir / "pexels_manifest.json"
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+    return downloaded_paths
 
 def tool_generate_run_id(config: AgentConfig) -> str:
     """
@@ -127,8 +183,9 @@ def main():
     api_key = tool_get_pexels_key()
     print("Pexels key: found")
 
-    downloaded_image = tool_download_one_pexels_image(config, run_root, api_key)
-    print(f"Downloaded: {downloaded_image}")
+    downloaded_images = tool_download_pexels_images(config, run_root, api_key)
+    print(f"Downloaded {len(downloaded_images)} images")
+    print(f"Manifest: {run_root / 'review' / 'pexels_manifest.json'}")
 
     print(plan)
     print(f"Run ID: {run_id}")
