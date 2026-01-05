@@ -32,7 +32,7 @@ def decide_plan(topic: str) -> str:
     """
     return f"Plan created for topic: {topic}"
 
-def tool_generate_run_id(base_dir: str = "runs") -> str:
+def tool_generate_run_id(config: AgentConfig) -> str:
     """
     Tool: create a unique run id and ensure the run folder exists.
 
@@ -41,7 +41,7 @@ def tool_generate_run_id(base_dir: str = "runs") -> str:
     timestamp = datetime.datetime.now().strftime("%Y-%m-%dT%H%M%S")
     run_id = f"{timestamp}_{uuid.uuid4().hex[:8]}"
 
-    run_path = Path(base_dir) / run_id
+    run_path = Path(config.base_dir) / run_id
     run_path.mkdir(parents=True, exist_ok=True)
 
     return run_id
@@ -58,7 +58,7 @@ def main():
     print(f"Config: {config}")
 
     plan = decide_plan(config.topic)
-    run_id = tool_generate_run_id()
+    run_id = tool_generate_run_id(config)
     print(plan)
     print(f"Run ID: {run_id}")
 
