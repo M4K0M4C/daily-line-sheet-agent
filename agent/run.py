@@ -16,6 +16,8 @@ import requests
 import json
 import time
 from PIL import Image
+import math
+from PIL import ImageStat, ImageOps
 
 @dataclass
 class AgentConfig:
@@ -203,6 +205,85 @@ def tool_screen_images(config: AgentConfig, run_root: Path) -> dict:
 
     return report
 
+def tool_select_best_images(config: AgentConfig, run_root: Path) -> dict:
+    """
+    Tool: select the best images from ok/ and copy to picks/.
+
+    Writes review/selection_report.json
+    Returns the report dict.
+    """
+    ok_dir = run_root / "ok"
+    picks_dir = run_root / "picks"
+    review_dir = run_root / "review"
+
+    target_count = max(1, config.sheets_to_generate)
+
+    # Portrait-friendly target ratios (w/h). We'll reward closeness.
+    target_ratios = [4/5, 3/4, 2/3]
+
+    scored = []
+
+    for img_path in sorted(ok_dir.glob("*.jpg")):
+        with Image.open(img_path) as im:
+            w, h = im.size
+            short_side = min(w, h)
+            ratio = w / h
+
+            # 1) Resolution score: normalize using log to reduce domination by huge images
+            res_score = math.log(short_side)
+
+            # 2) Aspect ratio score: closeness to any target ratio (higher is better)
+            ar_dist = min(abs(ratio - tr) for tr in target_ratios)
+            ar_score = 1 / (1 + ar_dist)  # in (0,1], closer => closer to 1
+
+            # 3) Detail proxy: grayscale contrast (stddev) on a resized copy
+            thumb = im.copy()
+            thumb.thumbnail((800, 800))
+            gray = ImageOps.grayscale(thumb)
+            stat = ImageStat.Stat(gray)
+            # stddev is a rough proxy for contrast/detail
+            detail_score = stat.stddev[0] / 64.0  # scale roughly into ~0..2 range
+
+            total = (res_score * 1.0) + (ar_score * 2.0) + (detail_score * 1.5)
+
+            scored.append(
+                {
+                    "file": img_path.name,
+                    "width": w,
+                    "height": h,
+                    "short_side": short_side,
+                    "ratio_w_over_h": round(ratio, 3),
+                    "scores": {
+                        "resolution": round(res_score, 3),
+                        "aspect": round(ar_score, 3),
+                        "detail": round(detail_score, 3),
+                    },
+                    "total": round(total, 3),
+                }
+            )
+
+    scored.sort(key=lambda x: x["total"], reverse=True)
+
+    selected = scored[:target_count]
+
+    # Copy selected files into picks/ with deterministic names
+    for i, item in enumerate(selected, start=1):
+        src = ok_dir / item["file"]
+        dst = picks_dir / f"pick_{i:02d}.jpg"
+        dst.write_bytes(src.read_bytes())
+        item["picked_as"] = dst.name
+
+    report = {
+        "topic": config.topic,
+        "target_count": target_count,
+        "selected": selected,
+        "all_scored": scored,
+    }
+
+    report_path = review_dir / "selection_report.json"
+    report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    return report
+
 def tool_generate_run_id(config: AgentConfig) -> str:
     """
     Tool: create a unique run id and ensure the run folder exists.
@@ -257,6 +338,10 @@ def main():
     screening = tool_screen_images(config, run_root)
     print(f"Screened images — passed: {len(screening['passed'])}, failed: {len(screening['failed'])}")
     print(f"Screening report: {run_root / 'review' / 'screening_report.json'}")
+
+    selection = tool_select_best_images(config, run_root)
+    print(f"Selected {len(selection['selected'])} picks")
+    print(f"Selection report: {run_root / 'review' / 'selection_report.json'}")
 
     print(plan)
     print(f"Run ID: {run_id}")
