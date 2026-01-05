@@ -9,6 +9,19 @@ import sys
 import datetime
 import uuid
 from pathlib import Path
+from dataclasses import dataclass
+
+@dataclass
+class AgentConfig:
+    """
+    Configuration for a single run of the agent.
+
+    Think of this as the agent's 'settings panel'.
+    """
+    topic: str
+    candidates_to_download: int = 10
+    sheets_to_generate: int = 3
+    base_dir: str = "runs"
 
 def decide_plan(topic: str) -> str:
     """
@@ -38,16 +51,16 @@ def main():
         print("Usage: python agent/run.py <topic>")
         return
 
-    topic = sys.argv[1]
+    config = AgentConfig(topic=sys.argv[1])
 
     print("Daily Line Sheet Agent: run started")
-    print(f"Topic: {topic}")
+    print(f"Topic: {config.topic}")
+    print(f"Config: {config}")
 
-    plan = decide_plan(topic)
+    plan = decide_plan(config.topic)
     run_id = tool_generate_run_id()
     print(plan)
     print(f"Run ID: {run_id}")
 
 if __name__ == "__main__":
     main()
-    
