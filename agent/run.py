@@ -15,6 +15,7 @@ import os
 import requests
 import json
 import time
+from PIL import Image
 
 @dataclass
 class AgentConfig:
@@ -136,6 +137,72 @@ def tool_download_pexels_images(config: AgentConfig, run_root: Path, api_key: st
 
     return downloaded_paths
 
+def tool_screen_images(config: AgentConfig, run_root: Path) -> dict:
+    """
+    Tool: screen downloaded images for basic quality.
+
+    Copies passing images from raw/ -> ok/
+    Writes report to review/screening_report.json
+    Returns the report dict.
+    """
+    raw_dir = run_root / "raw"
+    ok_dir = run_root / "ok"
+    review_dir = run_root / "review"
+
+    min_short_side = 1600
+    max_aspect_ratio = 2.5  # e.g., reject very wide panoramas
+
+    report = {
+        "criteria": {
+            "min_short_side": min_short_side,
+            "max_aspect_ratio": max_aspect_ratio,
+        },
+        "passed": [],
+        "failed": [],
+    }
+
+    for img_path in sorted(raw_dir.glob("*.jpg")):
+        entry = {"file": img_path.name}
+
+        try:
+            with Image.open(img_path) as im:
+                width, height = im.size
+                short_side = min(width, height)
+                aspect_ratio = max(width, height) / short_side
+
+                entry.update(
+                    {
+                        "width": width,
+                        "height": height,
+                        "short_side": short_side,
+                        "aspect_ratio": round(aspect_ratio, 2),
+                    }
+                )
+
+                if short_side < min_short_side:
+                    entry["reason"] = "resolution_too_low"
+                    report["failed"].append(entry)
+                    continue
+
+                if aspect_ratio > max_aspect_ratio:
+                    entry["reason"] = "extreme_aspect_ratio"
+                    report["failed"].append(entry)
+                    continue
+
+                # Passed
+                target = ok_dir / img_path.name
+                target.write_bytes(img_path.read_bytes())
+                report["passed"].append(entry)
+
+        except Exception as e:
+            entry["reason"] = f"unreadable_image: {e}"
+            report["failed"].append(entry)
+
+    report_path = review_dir / "screening_report.json"
+    report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+
+    return report
+
 def tool_generate_run_id(config: AgentConfig) -> str:
     """
     Tool: create a unique run id and ensure the run folder exists.
@@ -186,6 +253,10 @@ def main():
     downloaded_images = tool_download_pexels_images(config, run_root, api_key)
     print(f"Downloaded {len(downloaded_images)} images")
     print(f"Manifest: {run_root / 'review' / 'pexels_manifest.json'}")
+
+    screening = tool_screen_images(config, run_root)
+    print(f"Screened images — passed: {len(screening['passed'])}, failed: {len(screening['failed'])}")
+    print(f"Screening report: {run_root / 'review' / 'screening_report.json'}")
 
     print(plan)
     print(f"Run ID: {run_id}")
