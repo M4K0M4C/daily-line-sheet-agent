@@ -18,6 +18,9 @@ import time
 from PIL import Image
 import math
 from PIL import ImageStat, ImageOps
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
+from reportlab.lib.utils import ImageReader
 
 @dataclass
 class AgentConfig:
@@ -284,6 +287,130 @@ def tool_select_best_images(config: AgentConfig, run_root: Path) -> dict:
     report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
     return report
 
+def tool_render_worksheet_pdfs(config: AgentConfig, run_root: Path) -> list[Path]:
+    """
+    Tool: render one PDF worksheet per picked image.
+
+    Outputs to: runs/<run_id>/sheets/
+    Returns list of created PDF paths.
+    """
+    picks_dir = run_root / "picks"
+    sheets_dir = run_root / "sheets"
+
+    page_w, page_h = letter  # 8.5 x 11 inches in points (612 x 792)
+
+    pdf_paths: list[Path] = []
+
+    # Very simple beginner-friendly tips template (topic-agnostic for now)
+    tips = [
+        "Block in big shapes first (gesture > detail).",
+        "Measure angles with your pencil; compare heights/widths.",
+        "Keep values simple: light, mid, dark. Refine later.",
+        "Edges: sharp edges pull focus; soft edges recede.",
+    ]
+
+    rubric = [
+        ("Proportions", "Major shapes match the reference (size/placement)."),
+        ("Values", "Clear separation of light/mid/dark."),
+        ("Edges", "Mix of soft and sharp edges used intentionally."),
+        ("Finish", "Drawing is clean; details support the main form."),
+    ]
+
+    pick_files = sorted(picks_dir.glob("pick_*.jpg"))
+    if not pick_files:
+        raise RuntimeError("No picks found. Run selection first.")
+
+    for i, img_path in enumerate(pick_files, start=1):
+        pdf_path = sheets_dir / f"worksheet_{i:02d}.pdf"
+        c = canvas.Canvas(str(pdf_path), pagesize=letter)
+
+        # Margins and layout constants (points)
+        margin = 36  # 0.5"
+        top_y = page_h - margin
+
+        # Header
+        c.setFont("Helvetica-Bold", 16)
+        c.drawString(margin, top_y, f"Daily Line — Day Sheet ({config.topic})")
+
+        c.setFont("Helvetica", 10)
+        c.drawString(margin, top_y - 16, f"Reference: {img_path.name}")
+
+        # Reference image box (top-left)
+        img_box_w = 240
+        img_box_h = 180
+        img_x = margin
+        img_y = top_y - 16 - 14 - img_box_h  # below header
+
+        c.setLineWidth(1)
+        c.rect(img_x, img_y, img_box_w, img_box_h)
+
+        # Draw image fit-in-box (preserve aspect)
+        with Image.open(img_path) as im:
+            iw, ih = im.size
+        scale = min(img_box_w / iw, img_box_h / ih)
+        draw_w = iw * scale
+        draw_h = ih * scale
+        dx = img_x + (img_box_w - draw_w) / 2
+        dy = img_y + (img_box_h - draw_h) / 2
+        c.drawImage(ImageReader(str(img_path)), dx, dy, draw_w, draw_h, preserveAspectRatio=True, mask='auto')
+
+        # Tips box (top-right)
+        tips_x = img_x + img_box_w + 24
+        tips_w = page_w - margin - tips_x
+        tips_h = img_box_h
+        tips_y = img_y
+
+        c.rect(tips_x, tips_y, tips_w, tips_h)
+        c.setFont("Helvetica-Bold", 12)
+        c.drawString(tips_x + 10, tips_y + tips_h - 18, "Tips (do these first)")
+
+        c.setFont("Helvetica", 10)
+        ty = tips_y + tips_h - 34
+        for t in tips:
+            c.drawString(tips_x + 10, ty, f"• {t}")
+            ty -= 14
+
+        # Drawing space (big box)
+        draw_box_x = margin
+        draw_box_y = margin + 140  # leave space for rubric at bottom
+        draw_box_w = page_w - 2 * margin
+        draw_box_h = (img_y - 24) - draw_box_y  # between top area and rubric
+        c.rect(draw_box_x, draw_box_y, draw_box_w, draw_box_h)
+
+        c.setFont("Helvetica-Oblique", 10)
+        c.drawString(draw_box_x + 10, draw_box_y + draw_box_h - 16, "Drawing space (light construction lines first)")
+
+        # Rubric box (bottom)
+        rubric_x = margin
+        rubric_y = margin
+        rubric_w = page_w - 2 * margin
+        rubric_h = 120
+        c.rect(rubric_x, rubric_y, rubric_w, rubric_h)
+
+        c.setFont("Helvetica-Bold", 12)
+        c.drawString(rubric_x + 10, rubric_y + rubric_h - 18, "Self-Critique Rubric (0–4 each)")
+
+        c.setFont("Helvetica", 9)
+        ry = rubric_y + rubric_h - 36
+        for name, desc in rubric:
+            c.drawString(rubric_x + 10, ry, f"{name}: {desc}")
+            # score boxes
+            sx = rubric_x + rubric_w - 120
+            c.drawString(sx - 40, ry, "Score:")
+            for k in range(5):
+                c.rect(sx + k * 18, ry - 8, 14, 14)
+            ry -= 18
+
+        c.setFont("Helvetica-Oblique", 9)
+        c.drawString(rubric_x + 10, rubric_y + 10, "Optional: write 1 improvement and 1 strength on the back.")
+
+        c.showPage()
+        c.save()
+
+        pdf_paths.append(pdf_path)
+
+    return pdf_paths
+
 def tool_generate_run_id(config: AgentConfig) -> str:
     """
     Tool: create a unique run id and ensure the run folder exists.
@@ -342,6 +469,10 @@ def main():
     selection = tool_select_best_images(config, run_root)
     print(f"Selected {len(selection['selected'])} picks")
     print(f"Selection report: {run_root / 'review' / 'selection_report.json'}")
+
+    pdfs = tool_render_worksheet_pdfs(config, run_root)
+    print(f"Rendered {len(pdfs)} PDFs")
+    print(f"Sheets folder: {run_root / 'sheets'}")
 
     print(plan)
     print(f"Run ID: {run_id}")
