@@ -10,6 +10,7 @@ import datetime
 import uuid
 from pathlib import Path
 from dataclasses import dataclass
+import os
 
 @dataclass
 class AgentConfig:
@@ -31,6 +32,19 @@ def decide_plan(topic: str) -> str:
     Later, this is where agent reasoning will live.
     """
     return f"Plan created for topic: {topic}"
+
+def tool_get_pexels_key() -> str:
+    """
+    Tool: read the Pexels API key from the environment.
+
+    We do this via an environment variable so we do not hard-code secrets in code.
+    """
+    key = os.environ.get("PEXELS_API_KEY")
+    if not key:
+        raise RuntimeError(
+            "PEXELS_API_KEY is not set. Set it in your environment before running."
+        )
+    return key
 
 def tool_generate_run_id(config: AgentConfig) -> str:
     """
@@ -75,6 +89,9 @@ def main():
     
     run_root = tool_create_run_folders(config, run_id)
     print(f"Run folder: {run_root}")
+    
+    _ = tool_get_pexels_key()
+    print("Pexels key: found")
 
     print(plan)
     print(f"Run ID: {run_id}")
