@@ -46,6 +46,19 @@ def tool_generate_run_id(config: AgentConfig) -> str:
 
     return run_id
 
+def tool_create_run_folders(config: AgentConfig, run_id: str) -> Path:
+    """
+    Tool: create the directory structure for a run.
+
+    Returns the Path to the run root folder (runs/<run_id>/).
+    """
+    run_root = Path(config.base_dir) / run_id
+
+    for name in ["raw", "ok", "picks", "sheets", "review"]:
+        (run_root / name).mkdir(parents=True, exist_ok=True)
+
+    return run_root
+
 def main():
     if len(sys.argv) < 2:
         print("Usage: python agent/run.py <topic>")
@@ -59,6 +72,10 @@ def main():
 
     plan = decide_plan(config.topic)
     run_id = tool_generate_run_id(config)
+    
+    run_root = tool_create_run_folders(config, run_id)
+    print(f"Run folder: {run_root}")
+
     print(plan)
     print(f"Run ID: {run_id}")
 
