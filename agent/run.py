@@ -411,6 +411,23 @@ def tool_render_worksheet_pdfs(config: AgentConfig, run_root: Path) -> list[Path
 
     return pdf_paths
 
+def tool_write_approval_placeholder(run_root: Path) -> Path:
+    """
+    Tool: write a human approval placeholder file.
+
+    The user edits this file to approve or reject the run.
+    """
+    review_dir = run_root / "review"
+    approval = {
+        "status": "PENDING",  # APPROVED | REJECTED
+        "reviewer": "",
+        "notes": "",
+    }
+
+    path = review_dir / "approval.json"
+    path.write_text(json.dumps(approval, indent=2), encoding="utf-8")
+    return path
+
 def tool_generate_run_id(config: AgentConfig) -> str:
     """
     Tool: create a unique run id and ensure the run folder exists.
@@ -473,6 +490,9 @@ def main():
     pdfs = tool_render_worksheet_pdfs(config, run_root)
     print(f"Rendered {len(pdfs)} PDFs")
     print(f"Sheets folder: {run_root / 'sheets'}")
+
+    approval_path = tool_write_approval_placeholder(run_root)
+    print(f"Awaiting human approval: {approval_path}")
 
     print(plan)
     print(f"Run ID: {run_id}")
